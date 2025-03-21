@@ -1,12 +1,15 @@
 #include <iostream>
 #include <string>
 #include <WS2tcpip.h>
+#include <thread>
+
 #pragma comment(lib, "ws2_32.lib")
 
 using std::cin;
 using std::cout;
 using std::endl;
 using std::string;
+using std::thread;
 
 void printLocalIPAddress() {
     char host[NI_MAXHOST];
@@ -16,8 +19,8 @@ void printLocalIPAddress() {
     }
 
     addrinfo hints = {};
-    hints.ai_family = AF_INET; // IPv4
-    hints.ai_socktype = SOCK_STREAM; // TCP, UDP is SOCK_DRGAM
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
     addrinfo* info;
@@ -36,24 +39,51 @@ void printLocalIPAddress() {
     freeaddrinfo(info);
 }
 
+// Function to receive messages in a separate thread
+void handleReceiving(SOCKET sock) {
+    char buf[4096];
+    while (true) {
+        ZeroMemory(buf, 4096);
+        int bytesReceived = recv(sock, buf, 4096, 0);
+        if (bytesReceived <= 0) {
+            cout << "\nConnection lost. Exiting...\n";
+            break;
+        }
+        cout << "\nReceived: " << string(buf, 0, bytesReceived) << "\n> ";
+    }
+}
+
+// Function to send messages in a separate thread
+void handleSending(SOCKET sock) {
+    string userInput;
+    while (true) {
+        cout << "> ";
+        getline(cin, userInput);
+        if (userInput.empty()) continue;
+
+        int sendResult = send(sock, userInput.c_str(), userInput.size(), 0);
+        if (sendResult == SOCKET_ERROR) {
+            cout << "Error sending message. Connection lost." << endl;
+            break;
+        }
+    }
+}
+
 void server() {
-    // Initialize Winsock
     WSADATA wsData;
     WORD ver = MAKEWORD(2, 2);
     if (WSAStartup(ver, &wsData) != 0) {
-        cout << "winsock error" << endl;
+        cout << "Winsock initialization failed!" << endl;
         return;
     }
 
-    // Create socket
     SOCKET listening = socket(AF_INET, SOCK_STREAM, 0);
     if (listening == INVALID_SOCKET) {
-        cout << "socket creation error" << endl;
+        cout << "Socket creation failed!" << endl;
         WSACleanup();
         return;
     }
 
-    // Bind IP and port
     sockaddr_in hint = {};
     hint.sin_family = AF_INET;
     hint.sin_port = htons(54000);
@@ -62,17 +92,15 @@ void server() {
     printLocalIPAddress();
 
     if (bind(listening, (sockaddr*)&hint, sizeof(hint)) == SOCKET_ERROR) {
-        cout << "binding error" << endl;
+        cout << "Binding failed!" << endl;
         closesocket(listening);
         WSACleanup();
         return;
     }
 
-    // Start listening
     listen(listening, SOMAXCONN);
     cout << "Waiting for a connection..." << endl;
 
-    // Accept connection
     sockaddr_in client;
     int clientSize = sizeof(client);
     SOCKET clientSocket = accept(listening, (sockaddr*)&client, &clientSize);
@@ -83,37 +111,16 @@ void server() {
         return;
     }
 
-    // Get client IP
-    char clientIP[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &client.sin_addr, clientIP, INET_ADDRSTRLEN);
+    closesocket(listening);
 
-    // Get client hostname
-    char clientHost[NI_MAXHOST];
-    char clientService[NI_MAXSERV];
-    if (getnameinfo((sockaddr*)&client, sizeof(client), clientHost, NI_MAXHOST, clientService, NI_MAXSERV, 0) == 0) {
-        cout << "Client connected: " << clientHost << " (" << clientIP << ") on port " << ntohs(client.sin_port) << endl;
-    }
-    else {
-        cout << "Client connected: " << clientIP << " (hostname unknown) on port " << ntohs(client.sin_port) << endl;
-    }
+    cout << "Client connected! Start chatting.\n";
 
-    closesocket(listening); // Close listening socket
+    thread receiveThread(handleReceiving, clientSocket);
+    thread sendThread(handleSending, clientSocket);
 
-    // Receive & echo loop
-    char buf[4096];
-    while (true) {
-        ZeroMemory(buf, 4096);
-        int bytesReceived = recv(clientSocket, buf, 4096, 0);
-        if (bytesReceived <= 0) {
-            cout << "Client disconnected." << endl;
-            break;
-        }
+    receiveThread.join();
+    sendThread.join();
 
-        cout << "Received: " << string(buf, 0, bytesReceived) << endl;
-        send(clientSocket, buf, bytesReceived, 0);
-    }
-
-    // Cleanup
     closesocket(clientSocket);
     WSACleanup();
 }
@@ -121,15 +128,13 @@ void server() {
 void client(string ipAddress) {
     int port = 54000;
 
-    // Initialize Winsock
-    WSADATA data;
+    WSADATA wsData;
     WORD ver = MAKEWORD(2, 2);
-    if (WSAStartup(ver, &data) != 0) {
+    if (WSAStartup(ver, &wsData) != 0) {
         cout << "Can't start Winsock! Quitting" << endl;
         return;
     }
 
-    // Create socket
     SOCKET sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
         cout << "Can't create socket, Err #" << WSAGetLastError() << endl;
@@ -137,13 +142,11 @@ void client(string ipAddress) {
         return;
     }
 
-    // Fill in server details
     sockaddr_in hint = {};
     hint.sin_family = AF_INET;
     hint.sin_port = htons(port);
     inet_pton(AF_INET, ipAddress.c_str(), &hint.sin_addr);
 
-    // Connect to server
     if (connect(sock, (sockaddr*)&hint, sizeof(hint)) == SOCKET_ERROR) {
         cout << "Can't connect to server, Err #" << WSAGetLastError() << endl;
         closesocket(sock);
@@ -151,27 +154,14 @@ void client(string ipAddress) {
         return;
     }
 
-    cout << "Connected to server!" << endl;
+    cout << "Connected to server! Start chatting.\n";
 
-    // Message loop
-    char buf[4096];
-    string userInput;
-    while (true) {
-        cout << "> ";
-        getline(cin, userInput);
-        if (userInput.empty()) continue;
+    thread receiveThread(handleReceiving, sock);
+    thread sendThread(handleSending, sock);
 
-        int sendResult = send(sock, userInput.c_str(), userInput.size(), 0);
-        if (sendResult != SOCKET_ERROR) {
-            ZeroMemory(buf, 4096);
-            int bytesReceived = recv(sock, buf, 4096, 0);
-            if (bytesReceived > 0) {
-                cout << "SERVER> " << string(buf, 0, bytesReceived) << endl;
-            }
-        }
-    }
+    receiveThread.join();
+    sendThread.join();
 
-    // Cleanup
     closesocket(sock);
     WSACleanup();
 }
@@ -180,7 +170,7 @@ int main() {
     char option;
     cout << "Would you like to be server or client? (s/c) > ";
     cin >> option;
-    cin.ignore(); // Ignore newline in input buffer
+    cin.ignore();
 
     if (option == 's') {
         server();

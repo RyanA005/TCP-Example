@@ -1,0 +1,3 @@
+﻿  main.cpp
+C:\Users\Ralpo\OneDrive\Documents\Coding Projects\Networking\TCP\main.cpp(164,70): warning C4267: 'argument': conversion from 'size_t' to 'int', possible loss of data
+  TCP.vcxproj -> C:\Users\Ralpo\OneDrive\Documents\Coding Projects\Networking\TCP\x64\Debug\TCP.exe
